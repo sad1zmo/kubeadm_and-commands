@@ -1,0 +1,468 @@
+biohazard
+192.168.100.14
+
+Для запуска k8s - kind
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+- role: worker
+  extraPortMappings:
+  - containerPort: 31080
+    hostPort: 80
+    listenAddress: "127.0.0.1"
+    protocol: TCP
+    
+
+## Общие команды
+kubectl api-resources --sort-by name -o wide | grep pods  - получить список всех глаголов для Pods
+kubectl exec ubuntu-sleeper -- whoami - вывести пользователя от имени которго запущен процесс внутри пода
+kubectl run mosquito --image nginx - Создст новый pod с образом nginx, и имя этого pod будет mosquito.
+kubectl delete pod rabbit  - удалить pod rabbit
+watch kubectl get pod elephant - получать выходные данные pod elephant каждые две секунды
+kubectl get pod elephant -o yaml > elephant.yaml  -  создать elephant.yaml файл уже работающего pod elephant
+
+kubectl get pods mosquito - посмотреть состояние пода mosquito
+
+kubectl explain pod - выводит описанеие и какие поля можно использовать, так же в в выводе есть ссылки на офф документацию для пода 
+kubectl describe pod mosquito - выводит данные созданного пода mosquito
+
+kubectl create -f deployment-definition.yml - создает новый deployment, используя конфигурацию, указанную в файле deployment-definition.yml
+kubectl get deployments - отображает список всех deployments, которые в данный момент работают в кластере Kubernetes
+kubectl apply -f deployment-definition.yml - применяет изменения, указанные в файле deployment-definition.yml, к существующему deployment. Если deployment не существует, он будет создано
+kubectl edit deployment frontend - внести изменеия в deployment frontend
+
+kubectl set image deployment/myapp-deployment nginx=nginx:1.7.1 - обновляет образ контейнера для deployment myapp-deployment, задавая новый образ nginx:1.7.1
+kubectl scale deployment myapp-deployment --replicas=2 -  изменяет количество реплик для deployment myapp-deployment, устанавливая его на 2
+
+kubectl get all --selector env=prod,bu=finance,tier=frontend - найти все сущности с метками env=prod,bu=finance,tier=frontend обязательно без пробелов
+kubectl get node node01 -o json > node_info.json   -  записать всю информацию о ноде node01 в файл node_info.json в json формате
+kubectl get node node01 -o jsonpath='{.metadata.labels}' | jq 'length'  -  посчитать количество меток для ноды node01
+kubectl get node node01 --show-labels  -  показать метки установленные на ноду node01
+kubectl label nodes node01 color=blue - Добавить метку color=blue на ноду node01
+
+kubectl get pods --field-selector spec.nodeName=node01  - узнать какие поды установлены на ноде node01
+kubectl get pods -o wide  -  получить в выводе больше информации
+kubectl delete pod ubuntu-sleeper-3 --grace-period=0 --force - немедленное удаление пода ubuntu-sleeper-3
+
+kubectl get daemonsets -A  - получить все Daemonset во всех namespace
+kubectl describe daemonset kube-proxy --namespace=kube-system  - получить описание daemonset kube-proxy в namespace kube-system (namespace указывать обязательно)
+kubectl create deployment elasticsearch --image=registry.k8s.io/fluentd-elasticsearch:1.20 -n kube-system --dry-run=client -o yaml > fluentd.yaml   -  создать шаблон для deployment fluentd.yaml 
+с именем elasticsearch образом registry.k8s.io/fluentd-elasticsearch:1.20 в name-space kube-system (--dry-run=client: Команда проверяет только синтаксис и валидность манифеста без взаимодействия с кластером.)
+
+Простой способ создать DaemonSet — сначала сгенерировать файл YAML для развертывания с помощью команды 
+kubectl create deployment elasticsearch --image=registry.k8s.io/fluentd-elasticsearch:1.20 -n kube-system --dry-run=client -o yaml > fluentd.yaml.
+После, убери поля replicas и strategy из YAML-файла в текстовом редакторе. Также измени kind с Deployment на DaemonSet и убери поле status.
+Наконец, создай Daemonset при помощи kubectl create -f fluentd.yaml
+
+ 
+
+## Taints и Tolerations
+kubectl describe nodes  controlplane | grep -i taint - Проверить есть ли на ноде controlplane какой либо taint
+
+kubectl taint nodes node01 spray=repellent:NoSchedule - Добавить taint для ноды 01 с Key = spray Value = repellent Effect = NoSchedule  (NoSchedule не назначать на ноду неподходящие ресурсы, 
+NoExecute если на ноде уже назначены неподходящие ресурсы убрать с ноды, PreferNoSchedule сначала попытаться разместить ресурс на других нодах и если таких не найдется то разметстить на этой)
+
+kubectl taint nodes node01 spray=repellent:NoSchedule-   - Удалить Taints с node01
+
+tolerations.yml для пода:
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+  tolerations:
+  - key: "spray"
+    operator: "Equal"
+    value: "repellent"
+    effect: "NoSchedule"
+
+Поле оператор может ыбть 2х типов: 
+operator: "Equal"
+operator: "Exists"
+
+В случае operator: "Exists"  pod сможет быть размещен на узле, несмотря на то, что узел имеет taint с ключом spray и значением repellent. Оператор Exists в toleration говорит Kubernetes, 
+что под будет терпеть любой taint с ключом spray, независимо от его значения.
+
+kubectl describe node controlplane | grep -i taint  - Узнать применяется ли на ноде controlplane какие либо Taints
+
+## Node Affinity/Anti-Affinity
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blue
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      run: nginx
+  template:
+    metadata:
+      labels:
+        run: nginx
+    spec:
+      containers:
+      - image: nginx
+        imagePullPolicy: Always
+        name: nginx
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: color
+                operator: In
+                values:
+                - blue
+
+
+## Rolling Updates and Rollbacks
+
+kubectl rollout status deployment/myapp-deployment - показывает статус текущего процесса deployment для myapp-deployment.
+kubectl rollout history deployment/myapp-deployment - отображает историю deployment для myapp-deployment, показывая изменения и версии.
+kubectl rollout undo deployment/myapp-deployment - откатывает развертывание myapp-deployment к предыдущей версии.
+kubectl rollout undo deployment/myapp-deployment --to-revision=<номер_ревизии> - откатится к конкретной ревизии deployment
+
+# ENV CONFIGMAP SECRETMAP
+
+kubectl create configmap webapp-config-map --from-literal ROCKET_SIZE=average - создать configmap webapp-config-map с переменной ROCKET_SIZE и значением average
+kubectl create secret generic db-secret --from-literal=DB_Host=sql01 - создать secret db-secret с переменной DB_Host и значением sql01
+
+# MAINTENANCE
+
+kubectl drain node01 --ignore-daemonsets - переместит все поды, за исключением подов, управляемых DaemonSet, на другие узлы кластера
+kubectl uncordon node01 - снимает ограничение с узла node01, позволяя планировщику Kubernetes назначать на него новые поды
+kubectl drain node01 --ignore-daemonsets --force - переместит все поды, за исключением подов, управляемых DaemonSet, на другие узлы кластера включая поды без контроллеров (Replicaset, DaemonSet, StatefulSet)
+kubectl cordon node01 - помечает узел как "cordoned", новые поды не будут назначаться на этот узел, но уже существующие поды на этом узле продолжат работать.
+
+# Updates
+
+mkdir /etc/apt/keyrings
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+apt update
+apt-mark showhold
+sudo apt-mark unhold kubelet kubeadm kubectl 
+kubeadm upgrade plan
+apt show kubeadm -a | grep 1.30
+apt install -y kubeadm=1.30.0-1.1 kubectl=1.30.0-1.1 kubelet=1.30.0-1.1
+kubeadm upgrade apply v1.30.0
+systemctl daemon-reload
+systemctl restart kubelet
+sudo apt-mark hold kubelet kubeadm kubectl
+
+# Backup and restore
+
+(Backup ETCD)
+etcdctl --endpoints=https://[127.0.0.1]:2379 \      # Необязательный флаг, указывает на адрес, где работает ETCD (127.0.0.1:2379)
+--cacert=/etc/kubernetes/pki/etcd/ca.crt \          # Обязательный флаг (абсолютный путь к файлу сертификата CA)
+--cert=/etc/kubernetes/pki/etcd/server.crt \        # Обязательный флаг (абсолютный путь к файлу сертификата сервера)
+--key=/etc/kubernetes/pki/etcd/server.key \         # Обязательный флаг (абсолютный путь к ключевому файлу)
+snapshot save /opt/snapshot-pre-boot.db
+
+etcdctl --write-out=table snapshot status /opt/snapshot-pre-boot.db - проверка работоспособности снапшота
+
+(restore ETCD)
+etcdctl  --data-dir /var/lib/etcd-from-backup \
+snapshot restore /opt/snapshot-pre-boot.db
+
+Далее, обнови /etc/kubernetes/manifests/etcd.yaml:
+
+Мы восстановили данные из снэпшота по новому пути на controlplane - /var/lib/etcd-from-backup, поэтому нам осталось только изменить этот путь в YAML-файле, т.е.изменить hostPath для тома с названием etcd-data со старой директории (/var/lib/etcd) на новую (/var/lib/etcd-from-backup).
+
+  volumes:
+  - hostPath:
+      path: /var/lib/etcd-from-backup
+      type: DirectoryOrCreate
+    name: etcd-data
+
+После изменения /var/lib/etcd контейнер будет смотреть в /var/lib/etcd-from-backup на узле controlplane (как нам и требовалось).
+
+После того, как обновишь файл, pod с ETCD будет автоматически пересоздан, поскольку это static pod, находящийся в каталоге /etc/kubernetes/manifests.
+Если после изменения ETCD pod с ним вместе автоматом рестартуют kube-controller-manager и kube-scheduler. Подожди 1-2 минуты, чтобы эти pods перезагрузились. Ты можешь запустить команду: watch "crictl ps | grep etcd",
+чтобы проверить, рестартовал ли ETCD pod.
+
+Если ETCD-pod не переходит в Ready 1/1, тогда сделай kubectl delete pod -n kube-system etcd-controlplane и подожди 1 минуту.
+
+# Kubeconfig из 4х кластеров
+
+apiVersion: v1
+kind: Config
+
+clusters:
+- name: production
+  cluster:
+    certificate-authority: /etc/kubernetes/pki/ca.crt
+    server: https://controlplane:6443
+
+- name: development
+  cluster:
+    certificate-authority: /etc/kubernetes/pki/ca.crt
+    server: https://controlplane:6443
+
+- name: kubernetes-on-aws
+  cluster:
+    certificate-authority: /etc/kubernetes/pki/ca.crt
+    server: https://controlplane:6443
+
+- name: test-cluster-1
+  cluster:
+    certificate-authority: /etc/kubernetes/pki/ca.crt
+    server: https://controlplane:6443
+
+contexts:
+- name: test-user@development
+  context:
+    cluster: development
+    user: test-user
+
+- name: aws-user@kubernetes-on-aws
+  context:
+    cluster: kubernetes-on-aws
+    user: aws-user
+
+- name: test-user@production
+  context:
+    cluster: production
+    user: test-user
+
+- name: research
+  context:
+    cluster: test-cluster-1
+    user: dev-user
+
+users:
+- name: test-user
+  user:
+    client-certificate: /etc/kubernetes/pki/users/test-user/test-user.crt
+    client-key: /etc/kubernetes/pki/users/test-user/test-user.key
+- name: dev-user
+  user:
+    client-certificate: /etc/kubernetes/pki/users/dev-user/developer-user.crt
+    client-key: /etc/kubernetes/pki/users/dev-user/dev-user.key
+- name: aws-user
+  user:
+    client-certificate: /etc/kubernetes/pki/users/aws-user/aws-user.crt
+    client-key: /etc/kubernetes/pki/users/aws-user/aws-user.key
+
+current-context: test-user@development
+preferences: {}
+
+
+kubectl config --kubeconfig=/root/my-kube-config use-context research - использовать dev-user для доступа к test-cluster-1 из конфига выше
+kubectl config --kubeconfig=/root/my-kube-config current-context  - узнать текущий контекст
+
+# RBAC
+
+source <(kubectl completion bash)
+echo "source <(kubectl completion bash)" >> ~/.bashrc
+alias k=kubectl
+complete -F __start_kubectl k
+k create namespace test-rbac
+kubectl -n test-rbac create serviceaccount test-user
+kubectl -n test-rbac create serviceaccount test-admin
+
+kubectl create role test-role --resource serviceaccounts --namespace test-rbac --verb get,list,watch --dry-run=client -o yaml
+kubectl create role test-role --resource serviceaccounts --namespace test-rbac --verb get,list,watch --dry-run=client -o yaml > test-role.yaml  (изменить yaml)
+k apply -f test-role.yaml
+kubectl create rolebinding test-binding --role test-role --serviceaccount=test-rbac:test-user --dry-run=client -o yaml  (добавить namespace)
+kubectl create rolebinding test-binding --role test-role --serviceaccount=test-rbac:test-user --dry-run=client -o yaml | k apply -f -  (добавить namespace)
+kubectl create rolebinding admin-binding --role clusterrole:cluster-admin --serviceaccount=test-rbac:test-admin --dry-run=client -o yaml   (добавить namespace)
+kubectl create rolebinding admin-binding --clusterrole cluster-admin --serviceaccount=test-rbac:test-admin --dry-run=client -o yaml | k apply -f -  (добавить namespace)
+
+
+
+kubectl api-resources - получить список всех apiGroup и apiVersion
+kubectl describe pod kube-apiserver-controlplane -n kube-system  
+kubectl get role
+kubectl get role kube-proxy -n kube-system
+kubectl describe role kube-proxy -n kube-system
+kubectl describe rolebinding kube-proxy -n kube-system
+kubectl get pods --as dev-user
+kubectl auth can-i list nodes --as alena
+
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: default
+  name: developer
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list", "create","delete"]
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: dev-user-binding
+subjects:
+- kind: User
+  name: dev-user
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer
+  apiGroup: rbac.authorization.k8s.io
+
+---------------------------------------------------------------------------------------
+kubectl get clusterrole 
+kubectl get clusterrolebindings
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: node-admin
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "watch", "list", "create", "delete"]
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: alena-binding
+subjects:
+- kind: User
+  name: alena
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: node-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: storage-admin
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "watch", "list", "create", "delete"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "watch", "list", "create", "delete"]
+
+--------------------------------------------------------------------------
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: alena-storage-admin
+subjects:
+- kind: User
+  name: alena
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: storage-admin
+  apiGroup: rbac.authorization.k8s.io
+
+# Service Account
+
+kubectl create serviceaccount dashboard-account - создать сервисный аккаунт dashboard-account
+kubectl create token dashboard-account - создать токен для dashboard-account
+kubectl set serviceaccount deploy/webapp-get-pods dashboard-account  -  изменить serviceaccount для deploy webapp-get-pods с дефолтного на dashboard-account
+
+либо добавить файл ниже:  После запусти команду: kubectl apply -f <FILE-NAME>.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-get-pods
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: webapp-get-pods
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        name: webapp-get-pods
+    spec:
+      serviceAccountName: dashboard-account
+      containers:
+      - image: rotorocloud/webapp-get-pods
+        imagePullPolicy: Always
+        name: webapp-get-pods
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+
+kubectl create secret docker-registry private-reg-cred \     
+--docker-username=dock_user \
+--docker-password=dock_password \
+--docker-server=myprivateregistry.com:5000 \
+--docker-email=dock_user@myprivateregistry.com          - создать секрет для docker registry
+
+
+Указать приватное хранилище образов:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: private-reg
+spec:
+  containers:
+  - name: private-reg-container
+    image: my_app
+  imagePullSecrets:
+  - name: private-reg-cred
+
+
+# Network
+
+kubectl get networkpolicy - получить список networkpolicy
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      name: internal
+  policyTypes:
+  - Egress
+  - Ingress
+  ingress:
+    - {}
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          name: mysql
+    ports:
+    - protocol: TCP
+      port: 3306
+
+  - to:
+    - podSelector:
+        matchLabels:
+          name: payroll
+    ports:
+    - protocol: TCP
+      port: 8080
+
+  - ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
