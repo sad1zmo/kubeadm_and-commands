@@ -1,0 +1,233 @@
+curl -sLO https://github.com/etcd-io/etcd/releases/download/v3.5.12/etcd-v3.5.12-linux-amd64.tar.gz
+tar -xf etcd-v3.5.12-linux-amd64.tar.gz
+mv etcd-v3.5.12-linux-amd64/etcd*  /usr/local/bin/
+vim /etc/systemd/system/etcd.service
+
+[Unit]
+Description=etcd
+After=network.target
+
+[Service]
+Type=notify
+User=etcd
+EnvironmentFile=/etc/etcd.env
+ExecStart=/usr/local/bin/etcd
+NotifyAccess=all
+Restart=always
+RestartSec=10s
+LimitNOFILE=40000
+
+[Install]
+WantedBy=multi-user.target
+
+systemctl daemon-reload
+
+curl -sL https://github.com/cloudflare/cfssl/releases/download/v1.6.5/cfssl_1.6.5_linux_amd64 -o cfssl && chmod +x cfssl && mv cfssl /bin
+
+curl -sL https://github.com/cloudflare/cfssl/releases/download/v1.6.5/cfssljson_1.6.5_linux_amd64 -o cfssljson && chmod +x cfssljson && mv cfssljson /bin
+
+mkdir certs && cd certs
+cfssl print-defaults config > ca.json
+cfssl print-defaults csr > ca-request.json
+
+
+vim ca.json
+
+{
+    "signing": {
+        "default": {
+            "expiry": "87600h"
+        },
+        "profiles": {
+            "server": {
+                "expiry": "8760h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "server auth",
+                    "client auth"
+                ],
+                "ca_constraint": {
+                    "is_ca": false
+                },
+                "key": {
+                    "algo": "rsa",
+                    "size": 4096
+                }
+            },
+            "client": {
+                "expiry": "8760h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "client auth"
+                ],
+                "ca_constraint": {
+                    "is_ca": false
+                },
+                "key": {
+                    "algo": "rsa",
+                    "size": 4096
+                }
+            },
+            "member": {
+                "expiry": "8760h",
+                "usages": [
+                    "signing",
+                    "key encipherment",
+                    "server auth",
+                    "client auth"
+                ],
+                "ca_constraint": {
+                    "is_ca": false
+                },
+                "key": {
+                    "algo": "rsa",
+                    "size": 4096
+                }
+            }
+        }
+    }
+}
+
+
+vim ca-request.json
+
+{
+    "CN": "example.net",
+    "hosts": [
+        "example.net",
+        "www.example.net"
+    ],
+    "key": {
+        "algo": "ecdsa",
+        "size": 256
+    },
+    "names": [
+        {
+            "C": "US",
+            "ST": "CA",
+            "L": "San Francisco"
+        }
+    ]
+}
+
+cfssl gencert -initca ca-request.json | cfssljson -bare ca -
+
+vim server1.json
+
+{
+     "CN": "etcd-member-node1",
+     "hosts": [
+         "localhost",
+         "node1",
+         "etcd1",
+         "10.0.0.4",
+         "127.0.0.1"
+     ],
+     "key": {
+         "algo": "ecdsa",
+         "size": 256
+     }
+ }
+
+ cp server1.json server2.json
+ cp server1.json server3.json
+
+ сменить айпи на валидные
+
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=server server1.json | cfssljson -bare server1
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=server server2.json | cfssljson -bare server2
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=server server3.json | cfssljson -bare server3
+
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=client server1.json | cfssljson -bare client1
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=client server2.json | cfssljson -bare client2
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=client server3.json | cfssljson -bare client3
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=member server1.json | cfssljson -bare member1
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=member server2.json | cfssljson -bare member2
+cfssl gencert -ca=ca.pem -ca-key=ca-key.pem -config=ca.json -profile=member server3.json | cfssljson -bare member3
+
+mkdir -p /etc/ssl/etcd/ssl
+mkdir -p /var/lib/etcd
+cp ca*.pem /etc/ssl/etcd/ssl
+mv client1*.pem /etc/ssl/etcd/ssl
+mv member1*.pem /etc/ssl/etcd/ssl
+mv server1*.pem /etc/ssl/etcd/ssl
+groupadd --system etcd --gid 1100
+useradd --home-dir "/var/lib/etcd" --system --shell /sbin/nologin -g etcd --uid 1100 etcd
+
+chown -R etcd:etcd /etc/ssl/etcd
+chown -R etcd:etcd /var/lib/etcd
+chmod -R 750 /etc/ssl/etcd
+chmod -R 750 /var/lib/etcd
+
+
+chown -R etcd:etcd /etc/ssl/etcd
+chown -R etcd:etcd /var/lib/etcd
+chmod -R 750 /etc/ssl/etcd
+chmod -R 750 /var/lib/etcd
+cat <<EOF > /etc/etcd.env
+# директория, где будут храниться данные etcd
+ETCD_DATA_DIR=/var/lib/etcd
+ETCD_ADVERTISE_CLIENT_URLS=https://167.99.210.106:2379
+ETCD_INITIAL_ADVERTISE_PEER_URLS=https://167.99.210.106:2380
+ETCD_INITIAL_CLUSTER_STATE=new
+ETCD_METRICS=basic
+ETCD_LISTEN_CLIENT_URLS=https://167.99.210.106:2379,https://127.0.0.1:2379
+ETCD_ELECTION_TIMEOUT=5000
+ETCD_HEARTBEAT_INTERVAL=250
+ETCD_INITIAL_CLUSTER_TOKEN=k8s_etcd
+ETCD_LISTEN_PEER_URLS=https://167.99.210.106:2380
+# будет меняться имя ноды в кластере
+ETCD_NAME=node1
+ETCD_PROXY=off
+# список всех членов кластера
+ETCD_INITIAL_CLUSTER=node1=https://167.99.210.106:2380,node2=https://159.223.3.75:2380,node3=https://167.71.70.145:2380
+ETCD_AUTO_COMPACTION_RETENTION=8
+ETCD_SNAPSHOT_COUNT=10000
+# Flannel need etcd v2 API
+ETCD_ENABLE_V2=true
+# TLS settings
+ETCD_TRUSTED_CA_FILE=/etc/ssl/etcd/ssl/ca.pem
+ETCD_CERT_FILE=/etc/ssl/etcd/ssl/server1.pem
+ETCD_KEY_FILE=/etc/ssl/etcd/ssl/server1-key.pem
+ETCD_CLIENT_CERT_AUTH=true
+ETCD_PEER_TRUSTED_CA_FILE=/etc/ssl/etcd/ssl/ca.pem
+ETCD_PEER_CERT_FILE=/etc/ssl/etcd/ssl/member1.pem
+ETCD_PEER_KEY_FILE=/etc/ssl/etcd/ssl/member1-key.pem
+ETCD_PEER_CLIENT_CERT_AUTH=True
+# CLI settings
+ETCDCTL_ENDPOINTS=https://127.0.0.1:2379
+ETCDCTL_CACERT=/etc/ssl/etcd/ssl/ca.pem
+ETCDCTL_KEY=/etc/ssl/etcd/ssl/client1-key.pem
+ETCDCTL_CERT=/etc/ssl/etcd/ssl/client1.pem
+# ETCD 3.5.x issue
+# https://groups.google.com/a/kubernetes.io/g/dev/c/B7gJs88XtQc/m/rSgNOzV2BwAJ?utm_medium=email&utm_source=footer
+ETCD_EXPERIMENTAL_INITIAL_CORRUPT_CHECK=True
+EOF
+
+vim /etc/etcd.env 
+cp /etc/etcd.env /tmp 
+systemctl start etcd
+systemctl status etcd.service
+journalctl -xeu etcd.service
+systemctl daemon-reload
+systemctl start etcd
+
+
+если все нормально то меняем значение
+sed -i 's/ETCD_INITIAL_CLUSTER_STATE=new/ETCD_INITIAL_CLUSTER_STATE=new/g' /etc/etcd.env
+
+ЕСЛИ ПРОБЛЕМЫ:
+   server has been already initialized
+   Etcd пишет, что директория /var/lib/etcd уже содержит данные (dir-type":"member).
+   Если ты меняешь ETCD_NAME или TLS — старые данные становятся несовместимыми.
+   Тогда надо очистить data-dir перед повторным запуском:
+
+   systemctl stop etcd
+   rm -rf /var/lib/etcd/*
+   systemctl start etcd
+
+scp /root/certs/{ca.pem,member2.pem,member2-key.pem,server2.pem,server2-key.pem,client2.pem,client2-key.pem} root@10.0.0.5:/tmp/
+
+export $(grep -v '^#' /etc/etcd.env | xargs -d '\n')
